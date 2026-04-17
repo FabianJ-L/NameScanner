@@ -1,0 +1,18 @@
+# Eingabe- und Ausgabeordner (Inhalte ignorieren, Ordner behalten)
+inbox/*
+sorted/*
+
+# Aber Ordner selbst tracken (leere Placeholder)
+!inbox/.gitkeep
+!sorted/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Temporäre Dateien vom Script
+tmp_roi.png
+
+# EasyOCR Cache
+.EasyOCR/
