@@ -3,114 +3,105 @@ import shutil
 import easyocr
 from PIL import Image, ImageOps
 import numpy as np
-from thefuzz import process  # Für die automatische Fehlerkorrektur
+from thefuzz import process
 
 # --- KONFIGURATION ---
-INPUT_FOLDER = "inbox"
-OUTPUT_FOLDER = "sorted"
-NAME_BOX = (200, 240, 900, 300)  # Deine optimierten Koordinaten
+SOURCE_DIRECTORY = "inbox"
+TARGET_DIRECTORY = "sorted"
+TARGET_AREA_COORDS = (200, 240, 900, 300) 
 
-# --- DEINE SCHÜLERLISTE ---
-# Hier alle Namen eintragen, die vorkommen können. 
-# Das Skript korrigiert OCR-Fehler (wie 'FADIAN') automatisch auf diese Namen.
-SCHUELER_DATENBANK = [
+# --- DATENBANK ---
+REFERENCE_ENTITIES = [
     "Janisch-Lang Fabian",
     "Häusler Valentin",
     "Müller Max",
     "Schmidt Sarah"
-    # ... hier weitere Namen ergänzen
 ]
 
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-reader = easyocr.Reader(["de", "en"], gpu=False)
+os.makedirs(TARGET_DIRECTORY, exist_ok=True)
+ocr_engine = easyocr.Reader(["de", "en"], gpu=False)
 
-def preprocess_blue_ink(img: Image.Image) -> Image.Image:
-    """Optimiert blaue Tinte auf weißem Hintergrund."""
-    img = img.convert("RGB")
-    r, _, _ = img.split()
-    enhanced = 255 - np.array(r)
-    result = Image.fromarray(enhanced)
-    result = ImageOps.autocontrast(result, cutoff=5)
-    return result
+def apply_image_enhancement(img_input: Image.Image) -> Image.Image:
+    """Bereitet das Bild für die Texterkennung vor."""
+    img_input = img_input.convert("RGB")
+    red_channel, _, _ = img_input.split()
+    enhanced_data = 255 - np.array(red_channel)
+    result_img = Image.fromarray(enhanced_data)
+    result_img = ImageOps.autocontrast(result_img, cutoff=5)
+    return result_img
 
-def clean_part(text: str) -> str:
-    """Entfernt Sonderzeichen für saubere Dateinamen."""
-    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜäöüß- ")
-    return "".join(c for c in text if c in allowed).strip()
+def sanitize_string(raw_text: str) -> str:
+    """Entfernt ungültige Zeichen für Dateisysteme."""
+    allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜäöüß- ")
+    return "".join(char for char in raw_text if char in allowed_chars).strip()
 
-def get_best_name_match(ocr_results: list) -> str:
-    """Vergleicht OCR-Text mit der Schülerliste und korrigiert Fehler."""
-    raw_text = " ".join(ocr_results).strip()
+def match_text_to_reference(ocr_output: list) -> str:
+    """Vergleicht OCR-Ergebnis mit Referenzliste."""
+    combined_text = " ".join(ocr_output).strip()
     
-    if not raw_text:
-        return "UNBEKANNT"
+    if not combined_text:
+        return "UNKNOWN_ENTITY"
 
-    # Suche den ähnlichsten Namen in deiner Datenbank
-    # match ist der Name, score ist die Ähnlichkeit (0-100)
-    match, score = process.extractOne(raw_text, SCHUELER_DATENBANK)
+    match, confidence = process.extractOne(combined_text, REFERENCE_ENTITIES)
     
-    print(f"  OCR erkannt: '{raw_text}' -> Match: '{match}' (Sicherheit: {score}%)")
+    print(f"  OCR-Eingabe: '{combined_text}' -> Match: '{match}' (Sicherheit: {confidence}%)")
     
-    # Wenn die Ähnlichkeit über 60% liegt, nehmen wir den Namen aus der Liste
-    if score > 60:
+    if confidence > 60:
         return match.replace(" ", "_")
     
-    # Ansonsten nehmen wir das, was die OCR gelesen hat (bereinigt)
-    return clean_part(raw_text).replace(" ", "_")
+    return sanitize_string(combined_text).replace(" ", "_")
 
-def extract_name(image_path: str, box: tuple) -> list:
-    img = Image.open(image_path)
-    roi = img.crop(box)
-    roi = preprocess_blue_ink(roi)
-    roi.save("debug_roi.png")
+def process_single_file(file_path: str, area_coords: tuple) -> list:
+    img = Image.open(file_path)
+    roi = img.crop(area_coords)
+    enhanced_roi = apply_image_enhancement(roi)
+    enhanced_roi.save("debug_roi.png")
     
-    results = reader.readtext(
-        np.array(roi), 
+    return ocr_engine.readtext(
+        np.array(enhanced_roi), 
         detail=0, 
         paragraph=True,
         allowlist="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜäöüß- "
     )
-    return results
 
-def process_files():
-    supported = {".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
-    files = [f for f in os.listdir(INPUT_FOLDER) if os.path.splitext(f)[1].lower() in supported]
+def run_batch_process():
+    supported_extensions = {".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
+    files_to_process = [f for f in os.listdir(SOURCE_DIRECTORY) 
+                        if os.path.splitext(f)[1].lower() in supported_extensions]
 
-    if not files:
-        print("Keine Dateien in 'inbox' gefunden.")
+    if not files_to_process:
+        print("Keine Dateien gefunden.")
         return
 
-    ok, failed = 0, 0
+    success_count, fail_count = 0, 0
 
-    for file in files:
-        path = os.path.join(INPUT_FOLDER, file)
-        ext = os.path.splitext(file)[1].lower()
+    for filename in files_to_process:
+        file_path = os.path.join(SOURCE_DIRECTORY, filename)
+        ext = os.path.splitext(filename)[1].lower()
         
         try:
-            print(f"\nVerarbeite: {file}...")
-            ocr_parts = extract_name(path, NAME_BOX)
+            print(f"\nBearbeite: {filename}...")
+            ocr_results = process_single_file(file_path, TARGET_AREA_COORDS)
             
-            # Hier passiert die Magie der Fehlerkorrektur
-            final_name = get_best_name_match(ocr_parts)
+            final_identifier = match_text_to_reference(ocr_results)
+            new_filename = f"{final_identifier}{ext}"
+            new_path = os.path.join(TARGET_DIRECTORY, new_filename)
             
-            new_filename = f"{final_name}{ext}"
-            new_path = os.path.join(OUTPUT_FOLDER, new_filename)
-            
-            # Duplikate verhindern (z.B. Test_1.jpg, Test_2.jpg)
+            # Konfliktlösung
             counter = 1
             while os.path.exists(new_path):
-                base = os.path.splitext(new_filename)[0]
-                new_path = os.path.join(OUTPUT_FOLDER, f"{base}_{counter}{ext}")
+                base_name = os.path.splitext(new_filename)[0]
+                new_path = os.path.join(TARGET_DIRECTORY, f"{base_name}_{counter}{ext}")
                 counter += 1
             
-            shutil.move(path, new_path)
+            shutil.move(file_path, new_path)
             print(f"  ✓ Gespeichert als: {os.path.basename(new_path)}")
-            ok += 1
+            success_count += 1
         except Exception as e:
-            print(f"  ✗ Fehler bei {file}: {e}")
-            failed += 1
+            print(f"  ✗ Fehler bei {filename}: {e}")
+            fail_count += 1
 
-    print(f"\nFertig! {ok} erfolgreich, {failed} fehlgeschlagen.")
+    print(f"\nAbgeschlossen! {success_count} erfolgreich, {fail_count} fehlerhaft.")
 
 if __name__ == "__main__":
-    process_files()
+    run_batch_process()
